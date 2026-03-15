@@ -57,6 +57,18 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define YE__L_Pin GPIO_PIN_5
+#define YE__L_GPIO_Port GPIOA
+#define SARI_Pin GPIO_PIN_6
+#define SARI_GPIO_Port GPIOA
+#define KIRMIZI_Pin GPIO_PIN_7
+#define KIRMIZI_GPIO_Port GPIOA
+#define BUZZER_PIN_HCSR04_Pin GPIO_PIN_8
+#define BUZZER_PIN_HCSR04_GPIO_Port GPIOE
+#define TIM_ECHO_HCSR04_Pin GPIO_PIN_9
+#define TIM_ECHO_HCSR04_GPIO_Port GPIOE
+#define TRIG_HCSR04_Pin GPIO_PIN_10
+#define TRIG_HCSR04_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
 
