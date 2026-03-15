@@ -22,8 +22,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 	#include <stdbool.h>
-/* USER CODE END Includes */
+#include "BMP180.h"
+#include <stdio.h>
+#include <string.h>
 
+/* USER CODE END Includes */
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
@@ -57,8 +60,10 @@
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart2;
 
@@ -85,6 +90,8 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -92,107 +99,132 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-//		//FONK. GÖREVİ: SENSÖR İÇİNDEKİ BİR REG E VERİ YAZMAK
-//		HAL_StatusTypeDef WriteReg(uint8_t reg, uint8_t data) // hangi reg e ne yazacağız (data) ?
-//		{
-//			uint8_t buf[2];
-//
-//			buf[0] = CMD_BIT | reg; // gidilecek register (Mesela reg = 0x00 ise: 0xA0 | 0x00 = 0xA0 ben ENABLE REG e gidiyorum demek)
-//
-//			buf[1] = data; // yazılacak komut-veri
-//
-//			// I2C ÜZERİNDEN VERİ YOLLAMA
-//			// (hangi i2c?,kiminle konuşacağız?, hangi veriyi göndereceğiz?, kaç byte göndericez?, ne kadar bekliyim?)
-//
-//			return HAL_I2C_Master_Transmit(&hi2c1, ADDR, buf, 2, HAL_MAX_DELAY); // neden return? -> HAL fonksiyonundan gelen sonucu aynen geri gönderiyoruz
-//		}
+float current_Temperature;
+float current_Pressure;
+float current_Altitude;
+
+float new_Temperature;
+float new_Pressure;
+float new_Altitude;
+
+float change_Temperature;
+float change_Pressure;
+float change_Altitude;
+
+char uart_msg[128];
+//char change_msg[] = "PRESS AGAIN FOR THE CHANGES\r\n";
+
+char temp_state[64] = "";
+char pres_state[64] = "";
+
+volatile uint8_t button_pressed = 0;
+volatile uint8_t tim_flag = 0;
+
+uint8_t first_mes_taken = 0;
+
+//volatile uint8_t uart_tx_ready = 1;
+
+		//FONK. GÖREVİ: SENSÖR İÇİNDEKİ BİR REG E VERİ YAZMAK
+		HAL_StatusTypeDef WriteReg(uint8_t reg, uint8_t data) // hangi reg e ne yazacağız (data) ?
+		{
+			uint8_t buf[2];
+
+			buf[0] = CMD_BIT | reg; // gidilecek register (Mesela reg = 0x00 ise: 0xA0 | 0x00 = 0xA0 ben ENABLE REG e gidiyorum demek)
+
+			buf[1] = data; // yazılacak komut-veri
+
+			// I2C ÜZERİNDEN VERİ YOLLAMA
+			// (hangi i2c?,kiminle konuşacağız?, hangi veriyi göndereceğiz?, kaç byte göndericez?, ne kadar bekliyim?)
+
+			return HAL_I2C_Master_Transmit(&hi2c1, ADDR, buf, 2, HAL_MAX_DELAY); // neden return? -> HAL fonksiyonundan gelen sonucu aynen geri gönderiyoruz
+		}
 
 
 
 
-//		//FONK. GÖREVİ: SENSÖRDEN 1 BYTE VERİ OKUMAK
-//		HAL_StatusTypeDef ReadReg(uint8_t reg, uint8_t *data) // hangi reg okunsun? okunan veri nereye yazılsın?
-//		{
-//		    uint8_t cmd = CMD_BIT | reg; // hangi reg i okumak istediğimi söylüyorum, önce red adr gönderiyoruz
-//
-//		    if (HAL_I2C_Master_Transmit(&hi2c1, ADDR, &cmd, 1, HAL_MAX_DELAY) != HAL_OK)
-//		        return HAL_ERROR; // ilk gönderim başarısızsa veri okumaya devam etme
-//
-//
-//		    // veriyi okuyan satır ( i2c üzerinden karşı taraftan veri alır)
-//		    // (i2c1 kullan, sensörden al, aldığın veriyi dataya koy, 1 byte al, bekle)
-//
-//		    return HAL_I2C_Master_Receive(&hi2c1,ADDR, data, 1, HAL_MAX_DELAY);
-//		}
+		//FONK. GÖREVİ: SENSÖRDEN 1 BYTE VERİ OKUMAK
+		HAL_StatusTypeDef ReadReg(uint8_t reg, uint8_t *data) // hangi reg okunsun? okunan veri nereye yazılsın?
+		{
+		    uint8_t cmd = CMD_BIT | reg; // hangi reg i okumak istediğimi söylüyorum, önce red adr gönderiyoruz
+
+		    if (HAL_I2C_Master_Transmit(&hi2c1, ADDR, &cmd, 1, HAL_MAX_DELAY) != HAL_OK)
+		        return HAL_ERROR; // ilk gönderim başarısızsa veri okumaya devam etme
+
+
+		    // veriyi okuyan satır ( i2c üzerinden karşı taraftan veri alır)
+		    // (i2c1 kullan, sensörden al, aldığın veriyi dataya koy, 1 byte al, bekle)
+
+		    return HAL_I2C_Master_Receive(&hi2c1,ADDR, data, 1, HAL_MAX_DELAY);
+		}
 
 
 
 
-//		//FONK. GÖREVİ: sensörden 2 byte okuyup bunu 16 bit sayı haline getirmek
-//		HAL_StatusTypeDef Read2Bytes(uint8_t startReg, uint16_t *value)
-//		{
-//		    uint8_t cmd = CMD_BIT | startReg;
-//		    uint8_t buf[2]; // 2 byte geçici olarak burada saklanır
-//
-//		    // şu register’dan okumaya başlayacağım
-//		    if (HAL_I2C_Master_Transmit(&hi2c1, ADDR, &cmd, 1, HAL_MAX_DELAY) != HAL_OK)
-//		        return HAL_ERROR;
-//
-//		    // Sonra sensörden 2 byte alıyoruz.
-//		    if (HAL_I2C_Master_Receive(&hi2c1, ADDR, buf, 2, HAL_MAX_DELAY) != HAL_OK)
-//		        return HAL_ERROR;
-//
-//		    *value = (uint16_t)(buf[1] << 8) | buf[0]; // Burada iki ayrı byte’ı birleştirip tek sayı yapıyoruz.
-//		    return HAL_OK;
-//		}
+		//FONK. GÖREVİ: sensörden 2 byte okuyup bunu 16 bit sayı haline getirmek
+		HAL_StatusTypeDef Read2Bytes(uint8_t startReg, uint16_t *value)
+		{
+		    uint8_t cmd = CMD_BIT | startReg;
+		    uint8_t buf[2]; // 2 byte geçici olarak burada saklanır
+
+		    // şu register’dan okumaya başlayacağım
+		    if (HAL_I2C_Master_Transmit(&hi2c1, ADDR, &cmd, 1, HAL_MAX_DELAY) != HAL_OK)
+		        return HAL_ERROR;
+
+		    // Sonra sensörden 2 byte alıyoruz.
+		    if (HAL_I2C_Master_Receive(&hi2c1, ADDR, buf, 2, HAL_MAX_DELAY) != HAL_OK)
+		        return HAL_ERROR;
+
+		    *value = (uint16_t)(buf[1] << 8) | buf[0]; // Burada iki ayrı byte’ı birleştirip tek sayı yapıyoruz.
+		    return HAL_OK;
+		}
 
 
 
-//		//FONK. GÖREVİ: SENSÖRÜ BAŞLATMAK. sensör doğru mu, bağlı mı, çalışmaya hazır mı?
-//		// sensörü başlat -> sonuç döndür
-//		HAL_StatusTypeDef TSL2591_Init(void)
-//		{
-//		    uint8_t id = 0; // sensör kimlik bilgisi
-//
-//		    if (ReadReg(0x12, &id) != HAL_OK) // sensörün id reg ini okuyoruz datasheetten. gerçekten tsl mi?
-//		        return HAL_ERROR; // eğer okunmuyorsa dur
-//
-//		    if (id != 0x50)  //okuduğum kimlik 0x50 değilse bu beklediğim sensör değil
-//		        return HAL_ERROR;
-//
-//		    if (WriteReg(ENABLE_REG, 0x03) != HAL_OK) // SENSÖRÜ AÇIYORUZ ENABLE_REG = 0x00 Bu register’a 0x03 yazıyoruz. power on
-//		        return HAL_ERROR;
-//
-//		    if (WriteReg(CONFIG_REG, 0x10) != HAL_OK) // Burada ayar yapıyoruz. 0x10 ile örnek bir gain/integration ayarı veriyoruz.
-//		        return HAL_ERROR;
-//
-//		    HAL_Delay(120);
-//
-//		    return HAL_OK; //Her şey yolunda gittiyse: sensör bulundu - sensör açıldı -  ayar yapıldı - o zaman başarıyla çık.
-//		}
+		//FONK. GÖREVİ: SENSÖRÜ BAŞLATMAK. sensör doğru mu, bağlı mı, çalışmaya hazır mı?
+		// sensörü başlat -> sonuç döndür
+		HAL_StatusTypeDef TSL2591_Init(void)
+		{
+		    uint8_t id = 0; // sensör kimlik bilgisi
+
+		    if (ReadReg(0x12, &id) != HAL_OK) // sensörün id reg ini okuyoruz datasheetten. gerçekten tsl mi?
+		        return HAL_ERROR; // eğer okunmuyorsa dur
+
+		    if (id != 0x50)  //okuduğum kimlik 0x50 değilse bu beklediğim sensör değil
+		        return HAL_ERROR;
+
+		    if (WriteReg(ENABLE_REG, 0x03) != HAL_OK) // SENSÖRÜ AÇIYORUZ ENABLE_REG = 0x00 Bu register’a 0x03 yazıyoruz. power on
+		        return HAL_ERROR;
+
+		    if (WriteReg(CONFIG_REG, 0x10) != HAL_OK) // Burada ayar yapıyoruz. 0x10 ile örnek bir gain/integration ayarı veriyoruz.
+		        return HAL_ERROR;
+
+		    HAL_Delay(120);
+
+		    return HAL_OK; //Her şey yolunda gittiyse: sensör bulundu - sensör açıldı -  ayar yapıldı - o zaman başarıyla çık.
+		}
 
 
 
 
-//		//FONK. GÖREVİ: sensörden gerçek ışık verilerini almak
-//		HAL_StatusTypeDef ReadRaw(uint16_t *ch0, uint16_t *ch1)
-//		{
-//		    uint8_t status = 0;
-//
-//		    if (ReadReg(STATUS_REG, &status) != HAL_OK)  // veri hazır mı? sensör ölçümü bitirmiş mi?
-//		        return HAL_ERROR;
-//
-//		    if ((status & 0x01) == 0) // Datasheette AVALID biti veri geçerli mi sorusunu cevaplar. 0 ise demek ki veri henüz hazır değil.
-//		        return HAL_BUSY; // “bekle, daha ölçüm bitmedi”
-//
-//		    if (Read2Bytes(C0DATAL_REG, ch0) != HAL_OK) //görünür + IR karışımı
-//		        return HAL_ERROR;
-//
-//		    if (Read2Bytes(C1DATAL_REG, ch1) != HAL_OK) //daha çok IR
-//		        return HAL_ERROR;
-//
-//		    return HAL_OK;
-//		}
+		//FONK. GÖREVİ: sensörden gerçek ışık verilerini almak
+		HAL_StatusTypeDef ReadRaw(uint16_t *ch0, uint16_t *ch1)
+		{
+		    uint8_t status = 0;
+
+		    if (ReadReg(STATUS_REG, &status) != HAL_OK)  // veri hazır mı? sensör ölçümü bitirmiş mi?
+		        return HAL_ERROR;
+
+		    if ((status & 0x01) == 0) // Datasheette AVALID biti veri geçerli mi sorusunu cevaplar. 0 ise demek ki veri henüz hazır değil.
+		        return HAL_BUSY; // “bekle, daha ölçüm bitmedi”
+
+		    if (Read2Bytes(C0DATAL_REG, ch0) != HAL_OK) //görünür + IR karışımı
+		        return HAL_ERROR;
+
+		    if (Read2Bytes(C1DATAL_REG, ch1) != HAL_OK) //daha çok IR
+		        return HAL_ERROR;
+
+		    return HAL_OK;
+		}
 
 
 
@@ -320,9 +352,9 @@ static void MX_I2C1_Init(void);
 	}
 
 
-//	// ışık verileri
-//	uint16_t ch0 = 0;
-//	uint16_t ch1 = 0;
+	// ışık verileri
+	uint16_t ch0 = 0;
+	uint16_t ch1 = 0;
 
 /* USER CODE END 0 */
 
@@ -358,16 +390,21 @@ int main(void)
   MX_TIM1_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
+  MX_I2C2_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 	  HAL_TIM_IC_Start_IT(&htim1,TIM_CHANNEL_1);
 	  HAL_TIM_Base_Start(&htim1);
 
-//	  if (TSL2591_Init() != HAL_OK)
-//	      {
-//	          while (1)
-//	          {
-//	          }
-//	      }
+	  if (TSL2591_Init() != HAL_OK)
+	      {
+	          while (1)
+	          {
+	          }
+	      }
+
+	  BMP180_Start();
+
 
   /* USER CODE END 2 */
 
@@ -386,11 +423,102 @@ int main(void)
 
 		  Buzzer_Control();
 
-//		  if (ReadRaw(&ch0, &ch1) == HAL_OK)
-//		          {
-//		          }
-//
-//		          HAL_Delay(200);
+		  if (ReadRaw(&ch0, &ch1) == HAL_OK)
+		          {
+		          }
+
+		          HAL_Delay(200);
+
+		          if (button_pressed || tim_flag)
+		          		{
+
+		          			button_pressed = 0;
+		          			tim_flag = 0;
+
+		          			if (first_mes_taken == 0)
+		          			{
+
+		          				current_Temperature = BMP180_GetTemp();
+		          				current_Pressure = BMP180_GetPress(0);
+		          				current_Altitude = BMP180_GetAlt(0);
+
+		          				HAL_TIM_Base_Start_IT(&htim2);
+
+		          				int len = snprintf(uart_msg, sizeof(uart_msg),
+		          						"Temperature: %.2f C\r\n"
+		          						"Pressure: %.2f Pa\r\n"
+		          						"Altitude: %.2f m\r\n\r\n", current_Temperature,current_Pressure, current_Altitude);
+
+		          				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len, HAL_MAX_DELAY); //verileri gönderdi
+
+		          //				HAL_UART_Transmit(&huart2, (uint8_t*) change_msg, strlen(change_msg), HAL_MAX_DELAY); // yeni veriler için tekrar bas
+
+
+		          				first_mes_taken = 1;
+		          			}
+
+		          			else
+
+		          			{
+		          				new_Temperature = BMP180_GetTemp();
+		          				new_Pressure = BMP180_GetPress(0);
+		          				new_Altitude = BMP180_GetAlt(0);
+
+		          //				change_Temperature = new_Temperature - current_Temperature;
+		          //				change_Pressure = new_Pressure - current_Pressure;
+
+		          				if (new_Temperature > current_Temperature)
+		          				{
+		          					strcpy(temp_state, "WARMER");
+		          				}
+		          				else if (new_Temperature < current_Temperature)
+		          				{
+		          					strcpy(temp_state, "COLDER");
+		          				}
+		          				else
+		          				{
+		          					strcpy(temp_state, " ");
+		          				}
+
+
+
+
+		          				if (new_Pressure > current_Pressure + 0.5)
+		          				{
+		          					strcpy(pres_state, "UP");
+		          				}
+		          				else if (new_Pressure < current_Pressure + 0.5)
+		          				{
+		          					strcpy(pres_state, "DOWN");
+		          				}
+
+
+
+		          				int len = snprintf(uart_msg, sizeof(uart_msg),
+		          										"Temperature: %.2f C  (%s) \r\n"
+		          										"Pressure: %.2f Pa   (%s)\r\n"
+		          										"Altitude: %.2f m\r\n\r\n", new_Temperature,temp_state, new_Pressure, pres_state, new_Altitude);
+
+		          				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len, HAL_MAX_DELAY);
+
+		          				current_Temperature = new_Temperature;
+		          				current_Pressure = new_Pressure ;
+		          				current_Altitude = new_Altitude ;
+
+		          				new_Temperature = 0;
+		          				new_Pressure = 0;
+		          				new_Altitude = 0;
+
+
+
+		          			}
+
+
+
+
+		          		}
+
+
 	  }
   /* USER CODE END 3 */
 }
@@ -476,6 +604,40 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C2_Init(void)
+{
+
+  /* USER CODE BEGIN I2C2_Init 0 */
+
+  /* USER CODE END I2C2_Init 0 */
+
+  /* USER CODE BEGIN I2C2_Init 1 */
+
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C2_Init 2 */
+
+  /* USER CODE END I2C2_Init 2 */
+
+}
+
+/**
   * @brief TIM1 Initialization Function
   * @param None
   * @retval None
@@ -521,6 +683,51 @@ static void MX_TIM1_Init(void)
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 8400-1;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 30000-1;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -580,6 +787,12 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOE, BUZZER_PIN_HCSR04_Pin|TRIG_HCSR04_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /*Configure GPIO pins : YE__L_Pin SARI_Pin KIRMIZI_Pin */
   GPIO_InitStruct.Pin = YE__L_Pin|SARI_Pin|KIRMIZI_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -594,12 +807,30 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == GPIO_PIN_0) {
+		button_pressed = 1;
+	}
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if(htim->Instance == TIM2)
+    {
+        tim_flag = 1;
+        HAL_TIM_Base_Start_IT(&htim2);
+    }
+}
 
 /* USER CODE END 4 */
 
