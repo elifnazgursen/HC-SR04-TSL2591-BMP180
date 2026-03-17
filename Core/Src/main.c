@@ -57,7 +57,18 @@ UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_rx;
 
 /* USER CODE BEGIN PV */
-uint8_t sensorTimer = 0;
+uint32_t sensorTimer = 0;
+uint32_t uartTimer = 0;
+
+float temp = 0;
+float pres = 0;
+float alt = 0;
+
+float last_temp = 0;
+float last_pres = 0;
+
+uint16_t ch0 = 0;
+uint16_t ch1 = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -76,30 +87,36 @@ static void MX_TIM2_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-float current_Temperature;
-float current_Pressure;
-float current_Altitude;
+/* //float current_Temperature;
+//float current_Pressure;
+//float current_Altitude;
+//
+//float new_Temperature;
+//float new_Pressure;
+//float new_Altitude;
+//
+//float change_Temperature;
+//float change_Pressure;
+//float change_Altitude;
 
-float new_Temperature;
-float new_Pressure;
-float new_Altitude;
+//char change_msg[] = "PRESS AGAIN FOR THE CHANGES\r\n";
+//volatile uint8_t button_pressed = 0;
 
-float change_Temperature;
-float change_Pressure;
-float change_Altitude;
+//uint8_t first_mes_taken = 0;
+//volatile uint8_t uart_tx_ready = 1;
+
+//uint8_t rx_byte;
+//char rx_buffer[10];
+//uint8_t rx_index = 0;
+//uint8_t command_ready = 0; */
+
+
 
 char uart_msg[128];
-//char change_msg[] = "PRESS AGAIN FOR THE CHANGES\r\n";
-
 char temp_state[64] = "";
 char pres_state[64] = "";
 
-volatile uint8_t button_pressed = 0;
 volatile uint8_t tim_flag = 0;
-
-uint8_t first_mes_taken = 0;
-
-//volatile uint8_t uart_tx_ready = 1;
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM1) {
@@ -107,9 +124,8 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
-// ışık verileri
-uint16_t ch0 = 0;
-uint16_t ch1 = 0;
+
+
 
 /* USER CODE END 0 */
 
@@ -148,8 +164,13 @@ int main(void) {
 	MX_I2C2_Init();
 	MX_TIM2_Init();
 	/* USER CODE BEGIN 2 */
+
+	/* //	HAL_UART_Receive_IT(&huart2, &rx_byte, 1); */
+
+
 	HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
 	HAL_TIM_Base_Start(&htim1);
+	HAL_TIM_Base_Start_IT(&htim2);
 
 	if (TSL2591_Init() != HAL_OK) {
 		while (1) {
@@ -163,92 +184,136 @@ int main(void) {
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
 		if (HAL_GetTick() - sensorTimer >= 60) {
-			sensorTimer = HAL_GetTick();
-			HCSR04_Read();
+		    sensorTimer = HAL_GetTick();
+		    HCSR04_Read();
 		}
 
 		BuzzerLed_Control(HCSR04_GetDistance());
 
-		if (ReadRaw(&ch0, &ch1) == HAL_OK) {
+		if (tim_flag) {
+		    tim_flag = 0;
+
+		    temp = BMP180_GetTemp();
+		    pres = BMP180_GetPress(0);
+		    alt  = BMP180_GetAlt(0);
+
+		    char temp_state[10] = "";
+		    char pres_state[10] = "";
+		    char zone[10] = "";
+		    int level = 0;
+
+		    if (temp > last_temp) strcpy(temp_state, "WARMER");
+		    else if (temp < last_temp) strcpy(temp_state, "COLDER");
+
+		    if (pres > last_pres) strcpy(pres_state, "UP");
+		    else if (pres < last_pres) strcpy(pres_state, "DOWN");
+
+		    if (ReadRaw(&ch0, &ch1) == HAL_OK) {
+		        if (ch0 >= 4000) level = 100;
+		        else level = (ch0 * 100) / 4000;
+		    }
+
+
+
+		    uint32_t dist = HCSR04_GetDistance();
+
+		    if (dist <= 10) strcpy(zone, "RED");
+		    else if (dist <= 20) strcpy(zone, "YELLOW");
+		    else strcpy(zone, "GREEN");
+
+		    int len = snprintf(uart_msg, sizeof(uart_msg),
+		        "BMP|TEMP:%.2f|TEMP_STATE:%s|PRES:%.2f|PRES_STATE:%s|ALT:%.2f\r\n",temp, temp_state, pres, pres_state, alt);
+		    HAL_UART_Transmit(&huart2, (uint8_t*)uart_msg, len, HAL_MAX_DELAY);
+
+
+		    len = snprintf(uart_msg, sizeof(uart_msg),
+		        "TSL|CH0:%u|CH1:%u|LEVEL:%d\r\n",ch0, ch1, level);
+		    HAL_UART_Transmit(&huart2, (uint8_t*)uart_msg, len, HAL_MAX_DELAY);
+
+
+		    len = snprintf(uart_msg, sizeof(uart_msg),"HCSR04|DIST:%lu|ZONE:%s\r\n",dist, zone);
+		    HAL_UART_Transmit(&huart2, (uint8_t*)uart_msg, len, HAL_MAX_DELAY);
+
+		    last_temp = temp;
+		    last_pres = pres;
 		}
 
-		HAL_Delay(200);
-
-		if (button_pressed || tim_flag) {
-
-			button_pressed = 0;
-			tim_flag = 0;
-
-			if (first_mes_taken == 0) {
-
-				current_Temperature = BMP180_GetTemp();
-				current_Pressure = BMP180_GetPress(0);
-				current_Altitude = BMP180_GetAlt(0);
-
-				HAL_TIM_Base_Start_IT(&htim2);
-
-				int len = snprintf(uart_msg, sizeof(uart_msg),
-						"Temperature: %.2f C\r\n"
-								"Pressure: %.2f Pa\r\n"
-								"Altitude: %.2f m\r\n\r\n", current_Temperature,
-						current_Pressure, current_Altitude);
-
-				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len,
-				HAL_MAX_DELAY); //verileri gönderdi
-
-				//				HAL_UART_Transmit(&huart2, (uint8_t*) change_msg, strlen(change_msg), HAL_MAX_DELAY); // yeni veriler için tekrar bas
-
-				first_mes_taken = 1;
-			}
-
-			else
-
-			{
-				new_Temperature = BMP180_GetTemp();
-				new_Pressure = BMP180_GetPress(0);
-				new_Altitude = BMP180_GetAlt(0);
-
-				//				change_Temperature = new_Temperature - current_Temperature;
-				//				change_Pressure = new_Pressure - current_Pressure;
-
-				if (new_Temperature > current_Temperature) {
-					strcpy(temp_state, "WARMER");
-				} else if (new_Temperature < current_Temperature) {
-					strcpy(temp_state, "COLDER");
-				} else {
-					strcpy(temp_state, " ");
-				}
-
-				if (new_Pressure > current_Pressure + 0.5) {
-					strcpy(pres_state, "UP");
-				} else if (new_Pressure < current_Pressure + 0.5) {
-					strcpy(pres_state, "DOWN");
-				}
-
-				int len = snprintf(uart_msg, sizeof(uart_msg),
-						"Temperature: %.2f C  (%s) \r\n"
-								"Pressure: %.2f Pa   (%s)\r\n"
-								"Altitude: %.2f m\r\n\r\n", new_Temperature,
-						temp_state, new_Pressure, pres_state, new_Altitude);
-
-				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len,
-				HAL_MAX_DELAY);
-
-				current_Temperature = new_Temperature;
-				current_Pressure = new_Pressure;
-				current_Altitude = new_Altitude;
-
-				new_Temperature = 0;
-				new_Pressure = 0;
-				new_Altitude = 0;
-
-			}
-
-		}
+//		if (button_pressed || tim_flag) {
+//
+//			button_pressed = 0;
+//			tim_flag = 0;
+//
+//			if (first_mes_taken == 0) {
+//
+//				current_Temperature = BMP180_GetTemp();
+//				current_Pressure = BMP180_GetPress(0);
+//				current_Altitude = BMP180_GetAlt(0);
+//
+//				HAL_TIM_Base_Start_IT(&htim2);
+//
+//				int len = snprintf(uart_msg, sizeof(uart_msg),
+//						"Temperature: %.2f C\r\n"
+//								"Pressure: %.2f Pa\r\n"
+//								"Altitude: %.2f m\r\n\r\n", current_Temperature,
+//						current_Pressure, current_Altitude);
+//
+//				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len,
+//				HAL_MAX_DELAY); //verileri gönderdi
+//
+//				//				HAL_UART_Transmit(&huart2, (uint8_t*) change_msg, strlen(change_msg), HAL_MAX_DELAY); // yeni veriler için tekrar bas
+//
+//				first_mes_taken = 1;
+//			}
+//
+//			else
+//
+//			{
+//				new_Temperature = BMP180_GetTemp();
+//				new_Pressure = BMP180_GetPress(0);
+//				new_Altitude = BMP180_GetAlt(0);
+//
+//				//				change_Temperature = new_Temperature - current_Temperature;
+//				//				change_Pressure = new_Pressure - current_Pressure;
+//
+//				if (new_Temperature > current_Temperature) {
+//					strcpy(temp_state, "WARMER");
+//				} else if (new_Temperature < current_Temperature) {
+//					strcpy(temp_state, "COLDER");
+//				} else {
+//					strcpy(temp_state, " ");
+//				}
+//
+//				if (new_Pressure > current_Pressure + 0.5) {
+//					strcpy(pres_state, "UP");
+//				} else if (new_Pressure < current_Pressure + 0.5) {
+//					strcpy(pres_state, "DOWN");
+//				}
+//
+//				int len = snprintf(uart_msg, sizeof(uart_msg),
+//						"Temperature: %.2f C  (%s) \r\n"
+//								"Pressure: %.2f Pa   (%s)\r\n"
+//								"Altitude: %.2f m\r\n\r\n", new_Temperature,
+//						temp_state, new_Pressure, pres_state, new_Altitude);
+//
+//				HAL_UART_Transmit(&huart2, (uint8_t*) uart_msg, len,
+//				HAL_MAX_DELAY);
+//
+//				current_Temperature = new_Temperature;
+//				current_Pressure = new_Pressure;
+//				current_Altitude = new_Altitude;
+//
+//				new_Temperature = 0;
+//				new_Pressure = 0;
+//				new_Altitude = 0;
+//
+//			}
+//
+//		}
 
 	}
 	/* USER CODE END 3 */
@@ -549,11 +614,31 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if (GPIO_Pin == GPIO_PIN_0) {
-		button_pressed = 1;
-	}
-}
+
+//void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+//{
+//    if (huart->Instance == USART2)
+//    {
+//        if (rx_byte == '\n' || rx_byte == '\r')
+//        {
+//            rx_buffer[rx_index] = '\0';
+//            rx_index = 0;
+//            command_ready = 1;
+//        }
+//        else
+//        {
+//            rx_buffer[rx_index++] = rx_byte;
+//        }
+//
+//        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+//    }
+//}
+
+//void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+//	if (GPIO_Pin == GPIO_PIN_0) {
+//		button_pressed = 1;
+//	}
+//}
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM2) {
